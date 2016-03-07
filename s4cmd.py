@@ -490,15 +490,20 @@ class S3Handler(object):
 
   def connect(self):
     '''Connect to S3 storage'''
+    kwargs = {}
+    if "S3_HOSTNAME" in os.environ:
+      kwargs["host"] = os.environ["S3_HOSTNAME"]
     try:
       if S3Handler.S3_KEYS:
         self.s3 = boto.connect_s3(S3Handler.S3_KEYS[0],
                                   S3Handler.S3_KEYS[1],
                                   is_secure = self.opt.use_ssl,
-                                  suppress_consec_slashes = False)
+                                  suppress_consec_slashes = False,
+                                  **kwargs)
       else:
         self.s3 = boto.connect_s3(is_secure = self.opt.use_ssl,
-                                  suppress_consec_slashes = False)
+                                  suppress_consec_slashes = False,
+                                  **kwargs)
     except Exception as e:
       raise RetryFailure('Unable to connect to s3: %s' % e)
 
@@ -1019,7 +1024,12 @@ class ThreadUtil(S3Handler, ThreadPool.Worker):
 
       # Here we need to have our own md5 value because multipart upload calculates
       # different md5 values.
-      mpu = bucket.initiate_multipart_upload(s3url.path, metadata = {'md5': self.file_hash(source), 'privilege': self.get_file_privilege(source)})
+      # XX NJS temporary hack:
+      # metadata = {'md5': self.file_hash(source),
+      #             'privilege': self.get_file_privilege(source)}
+      metadata = {}
+      mpu = bucket.initiate_multipart_upload(s3url.path, metadata = metadata)
+
 
       for args in self.get_file_splits(mpu.id, source, target, fsize, self.opt.multipart_split_size):
         self.pool.upload(*args)
@@ -1033,14 +1043,9 @@ class ThreadUtil(S3Handler, ThreadPool.Worker):
     if mpu is None:
       raise Failure('Could not find MultiPartUpload %s' % mpu_id)
 
-    data = None
     with open(source, 'rb') as f:
       f.seek(pos)
-      data = f.read(chunk)
-    if not data:
-      raise Failure('Unable to read data from source: %s' % source)
-
-    mpu.upload_part_from_file(StringIO(data), part)
+      mpu.upload_part_from_file(f, part, size=chunk)
 
     # Finalize
     if mpi.complete():
